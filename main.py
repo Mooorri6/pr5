@@ -20,7 +20,7 @@ def main():
     
     visualizer = ADSBVisualizer(analyzer)
     visualizer.plot_all()
-    visualizer.generate_report()
+    visualizer.gen_report()
     
     print(f"\nТестирование завершено. Отчет сохранен")
 
