@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
+from collections import defaultdict
 
 class ADSBVisualizer:
     
@@ -16,10 +17,10 @@ class ADSBVisualizer:
     def plot_all(self):
         self.plot_parameters()
         self.plot_heading()
-        self.plot_errors()
         self.plot_changes_by_param()
+        self.plot_tsr()
         self._write_error_files()
-
+    
     #курс
     def plot_heading(self):
         in_data = self._collect_input_data()
@@ -115,13 +116,7 @@ class ADSBVisualizer:
             plt.legend(loc='upper right', fontsize=10)
             
             if delays_ms:
-
-                max_delay = max(delays_ms)
-                min_delay = min(delays_ms)
-
-                
                 text = (f'Всего изменений: {len(delays_ms)}\n')
-                
                 plt.text(0.02, 0.95, text, transform=plt.gca().transAxes, 
                         verticalalignment='top', bbox=dict(boxstyle='round', 
                         facecolor='wheat', alpha=0.5), fontsize=10)
@@ -131,45 +126,6 @@ class ADSBVisualizer:
             plt.savefig(filename, dpi=150, bbox_inches='tight')
             plt.show()
             print(f"График изменений для {title} сохранен: {filename}")
-        
-    
-    def _write_error_files(self):
-        if not self.analyzer.errors:
-            print("Нет ошибок для записи в файлы")
-            return
-        
-        errors_by_type = {}
-        for err in self.analyzer.errors:
-            if err.type not in errors_by_type:
-                errors_by_type[err.type] = []
-            errors_by_type[err.type].append(err)
-        
-        error_configs = {
-            'coord': ('координаты', ['Время', 'Ошибка широты (м)', 'Ошибка долготы (м)']),
-            'speed': ('скорость', ['Время', 'Ошибка (узлы)']),
-            'heading': ('курс', ['Время', 'Ошибка (градусы)', 'Входной курс', 'Выходной курс']),
-            'altitude': ('высота', ['Время', 'Ошибка (футы)', 'Барометрическая', 'Геометрическая'])
-        }
-        
-        for err_type, err_list in errors_by_type.items():
-            if err_type in error_configs:
-                name, headers = error_configs[err_type]
-                filename = f"{self.errors_dir}/{err_type}_errors_{self.icao}.csv"
-                
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(','.join(headers) + '\n')
-                    
-                    for err in err_list:
-                        if err_type == 'coord':
-                            f.write(f"{err.time:.3f},{err.lat_diff:.2f},{err.lon_diff:.2f}\n")
-                        elif err_type == 'speed':
-                            f.write(f"{err.time:.3f},{err.diff:.2f}\n")
-                        elif err_type == 'heading':
-                            f.write(f"{err.time:.3f},{err.diff:.2f},{err.in_val:.2f},{err.out_val:.2f}\n")
-                        elif err_type == 'altitude':
-                            f.write(f"{err.time:.3f},{err.diff:.2f},{err.baro:.2f},{err.geo:.2f}\n")
-                
-                print(f"Записано {len(err_list)} ошибок {name} в {filename}")
     
     def _collect_input_data(self):
         data = {
@@ -361,65 +317,6 @@ class ADSBVisualizer:
         plt.show()
         print(f"График параметров сохранен: {filename}")
 
-    #графики ошибок
-    def plot_errors(self):
-        if not self.analyzer.errors:
-            print("Нет ошибок для построения графиков")
-            return
-        
-        errors_by_type = {}
-        for err in self.analyzer.errors:
-            if err.type not in errors_by_type:
-                errors_by_type[err.type] = []
-            errors_by_type[err.type].append(err)
-        
-        n_plots = len(errors_by_type)
-        if n_plots == 0:
-            return
-        
-        fig, axes = plt.subplots(n_plots, 1, figsize=(14, 4*n_plots))
-        if n_plots == 1:
-            axes = [axes]
-        
-        fig.suptitle(f'Ошибки параметров - ICAO {self.icao}', fontsize=14)
-        
-        plot_configs = {
-            'coord': ('Ошибка координат', 'метры', 'blue', 
-                     lambda e: max(e.lat_diff, e.lon_diff), 100),
-            'speed': ('Ошибка скорости', 'узлы', 'red',
-                     lambda e: e.diff, 2),
-            'heading': ('Ошибка курса', 'градусы', 'green',
-                       lambda e: e.diff, 2),
-            'altitude': ('Ошибка высоты', 'футы', 'orange',
-                        lambda e: e.diff, 2000),
-            'baro_altitude': ('Ошибка барометрической высоты', 'футы', 'orange',
-                            lambda e: e.diff, 2000),
-            'geo_altitude': ('Ошибка геометрической высоты', 'футы', 'brown',
-                           lambda e: e.diff, 2000)
-        }
-        
-        for ax, (err_type, err_list) in zip(axes, errors_by_type.items()):
-            if err_type in plot_configs:
-                title, ylabel, color, get_val, threshold = plot_configs[err_type]
-                
-                times = [e.time for e in err_list]
-                values = [get_val(e) for e in err_list]
-                
-                ax.plot(times, values, 'o', color=color, markersize=3)
-                ax.axhline(y=threshold, color='r', linestyle='--', 
-                          alpha=0.5, label=f'Порог {threshold}')
-                ax.legend()
-                
-                ax.set_xlabel('Время (с)')
-                ax.set_ylabel(ylabel)
-                ax.set_title(title)
-                ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        filename = f'errors_{self.icao}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.show()
-        print(f"График ошибок сохранен: {filename}")
     
     def gen_report(self):
         filename = f'test_report_{self.icao}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
@@ -481,7 +378,6 @@ class ADSBVisualizer:
         f.write("\n")
     
     def _write_errors(self, f):
-
         f.write("-" * 40 + "\n")
         f.write("Ошибки параметров\n")
         f.write("-" * 40 + "\n")
@@ -490,38 +386,89 @@ class ADSBVisualizer:
             f.write("Ошибок не обнаружено\n\n")
             return
         
-        errors_by_type = {}
+        errors_by_type = defaultdict(list)
         for err in self.analyzer.errors:
-            if err.type not in errors_by_type:
-                errors_by_type[err.type] = []
             errors_by_type[err.type].append(err)
         
         for err_type, err_list in errors_by_type.items():
+            f.write(f"\n{err_type} ({len(err_list)} ошибок):\n")
+            for err in err_list[:10]:
+                f.write(f"  t={err.time:.1f}с: ")
+                if err_type == 'coord':
+                    f.write(f"lat_diff={getattr(err, 'lat_diff', 0):.1f}м, lon_diff={getattr(err, 'lon_diff', 0):.1f}м")
+                elif err_type == 'speed':
+                    f.write(f"diff={getattr(err, 'diff', 0):.1f} узлов")
+                elif err_type == 'heading':
+                    f.write(f"diff={getattr(err, 'diff', 0):.1f}°")
+                else:
+                    f.write(f"in={getattr(err, 'in_val', '?')} out={getattr(err, 'out_val', '?')}")
+                f.write("\n")
+        f.write("\n")
+    
+    def _write_error_files(self):
+        if not self.analyzer.errors:
+            print("Нет ошибок для записи в файлы")
+            return
+        
+        errors_by_type = {}
+        for err in self.analyzer.errors:
+            err_type = err.type
+            if err_type not in errors_by_type:
+                errors_by_type[err_type] = []
+            errors_by_type[err_type].append(err)
+        
+        if not os.path.exists(self.errors_dir):
+            os.makedirs(self.errors_dir)
+        
+        for err_type, err_list in errors_by_type.items():
             if err_type == 'coord':
-                f.write(f"\nКоординаты (>100 м): {len(err_list)}\n")
-                for err in err_list[:10]:
-                    f.write(f"  t={err.time:.1f}с: lat={err.lat_diff:.1f}м, "
-                           f"lon={err.lon_diff:.1f}м\n")
+                # Ошибки координат
+                filename = f"{self.errors_dir}/coord_errors_{self.icao}.csv"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("Время,Ошибка широты (м),Ошибка долготы (м),Входное значение,Выходное значение\n")
+                    for err in err_list:
+                        lat_diff = getattr(err, 'lat_diff', 0)
+                        lon_diff = getattr(err, 'lon_diff', 0)
+                        in_val = getattr(err, 'in_val', '?')
+                        out_val = getattr(err, 'out_val', '?')
+                        f.write(f"{err.time:.3f},{lat_diff:.2f},{lon_diff:.2f},{in_val},{out_val}\n")
+                print(f"Записано {len(err_list)} ошибок координат в {filename}")
             
             elif err_type == 'speed':
-                f.write(f"\nСкорость (>2 узлов): {len(err_list)}\n")
-                for err in err_list[:10]:
-                    f.write(f"  t={err.time:.1f}с: {err.diff:.1f} узлов\n")
+                # Ошибки скорости
+                filename = f"{self.errors_dir}/speed_errors_{self.icao}.csv"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("Время,Ошибка (узлы),Входное значение,Выходное значение\n")
+                    for err in err_list:
+                        diff = getattr(err, 'diff', 0)
+                        in_val = getattr(err, 'in_val', '?')
+                        out_val = getattr(err, 'out_val', '?')
+                        f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                print(f"Записано {len(err_list)} ошибок скорости в {filename}")
             
-            elif err_type == 'heading':
-                f.write(f"\nКурс (>2°): {len(err_list)}\n")
-                for err in err_list[:10]:
-                    f.write(f"  t={err.time:.1f}с: {err.diff:.1f}° "
-                           f"(in={err.in_val:.1f}°, out={err.out_val:.1f}°)\n")
+            elif err_type in ['baro_altitude', 'geo_altitude', 'altitude']:
+                # Ошибки высоты
+                filename = f"{self.errors_dir}/altitude_errors_{self.icao}.csv"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("Время,Ошибка (футы),Тип,Входное значение,Выходное значение\n")
+                    for err in err_list:
+                        diff = getattr(err, 'diff', 0)
+                        in_val = getattr(err, 'in_val', '?')
+                        out_val = getattr(err, 'out_val', '?')
+                        f.write(f"{err.time:.3f},{diff:.2f},{err_type},{in_val},{out_val}\n")
+                print(f"Записано {len(err_list)} ошибок высоты в {filename}")
             
-            elif err_type in ['altitude', 'baro_altitude', 'geo_altitude']:
-                name = 'Барометрическая высота' if err_type == 'baro_altitude' else 'Геометрическая высота' if err_type == 'geo_altitude' else 'Высота'
-                f.write(f"\n{name} (>2000 ft): {len(err_list)}\n")
-                for err in err_list[:10]:
-                    f.write(f"  t={err.time:.1f}с: {err.diff:.0f} ft "
-                           f"(in={err.in_val:.0f}, out={err.out_val:.0f})\n")
-        
-        f.write("\n")
+            else:
+                # Другие типы ошибок
+                filename = f"{self.errors_dir}/other_errors_{self.icao}.csv"
+                file_exists = os.path.exists(filename)
+                with open(filename, 'a', encoding='utf-8') as f:
+                    if not file_exists:
+                        f.write("Время,Тип ошибки,Данные\n")
+                    attrs = {k: v for k, v in err.__dict__.items() if k not in ['type', 'time']}
+                    f.write(f"{err.time:.3f},{err_type},{attrs}\n")
+                if not file_exists:
+                    print(f"Записаны прочие ошибки в {filename}")
     
     def _write_summary(self, f):
         f.write("-" * 40 + "\n")
@@ -567,3 +514,50 @@ class ADSBVisualizer:
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
+
+    
+    def plot_tsr(self):
+        """Графики TSR_STRUCT параметров"""
+        if not self.analyzer.tsr_messages:
+            print("Нет данных TSR для построения графика")
+            return
+        
+        times = [msg.timestamp for msg in self.analyzer.tsr_messages]
+        alts = [msg.selected_alt for msg in self.analyzer.tsr_messages if msg.selected_alt]
+        hdgs = [msg.selected_heading for msg in self.analyzer.tsr_messages if msg.selected_heading]
+        
+        in29_list = [msg for msg in self.analyzer.input_messages if msg.type == 'TYPE_29']
+        in_times = [msg.timestamp for msg in in29_list]
+        in_alts = [msg.selected_alt for msg in in29_list if msg.selected_alt]
+        in_hdgs = [msg.selected_heading for msg in in29_list if msg.selected_heading]
+        
+        fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+        fig.suptitle(f'TSR_STRUCT параметры - ICAO {self.icao}', fontsize=14)
+        
+        ax1 = axes[0]
+        if in_alts:
+            ax1.plot(in_times[:len(in_alts)], in_alts, 'b.', markersize=4, label='TYPE_29 (входные)')
+        if alts:
+            ax1.plot(times[:len(alts)], alts, 'r.', markersize=4, label='TSR_STRUCT (выходные)')
+        ax1.set_xlabel('Время (с)')
+        ax1.set_ylabel('Выбранная высота (футы)')
+        ax1.set_title('Выбранная высота')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        ax2 = axes[1]
+        if in_hdgs:
+            ax2.plot(in_times[:len(in_hdgs)], in_hdgs, 'b.', markersize=4, label='TYPE_29 (входные)')
+        if hdgs:
+            ax2.plot(times[:len(hdgs)], hdgs, 'r.', markersize=4, label='TSR_STRUCT (выходные)')
+        ax2.set_xlabel('Время (с)')
+        ax2.set_ylabel('Выбранный курс (градусы)')
+        ax2.set_title('Выбранный курс')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        plt.tight_layout()
+        filename = f'tsr_params_{self.icao}.png'
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.show()
+        print(f"График TSR сохранен: {filename}")
