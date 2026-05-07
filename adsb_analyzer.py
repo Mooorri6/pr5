@@ -17,7 +17,7 @@ class ADSBMessage:
                  'callsign', 'adsb_ver', 'nacp', 'sda', 'sil', 'gva',
                  'selected_alt', 'selected_heading', 'autopilot', 'vnav',
                  'altitude_hold', 'approach', 'lnav', 'gnss_lost', 
-                 'ias', 'heading', 'aircraft_status')
+                 'ias', 'heading', 'aircraft_status',  'tcas_operational', 'arv_capability', 'tsr_capability')
     
     def __init__(self, timestamp, msg_type='OTHER'):
         self.type = msg_type
@@ -49,12 +49,16 @@ class ADSBMessage:
         self.ias = None
         self.heading = None
         self.aircraft_status = None
+        self.tcas_operational = None
+        self.arv_capability = None
+        self.tsr_capability = None
 
 
 class ADSBError:
-    def __init__(self, error_type, t, **kwargs):
+    def __init__(self, error_type, t, param=None, **kwargs):
         self.type = error_type
         self.time = t
+        self.param = param
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -62,13 +66,21 @@ class ADSBError:
 class ADSBAnalyzer:
     """Анализ SVR, MSR, TSR, AVR"""
     
+    def _get_signed_velocity(self, vel, direction):
+        if vel is None:
+            return None
+        if direction == 'SOUTH' or direction == 'WEST':
+            return -vel
+        return vel
+    
+    #svr
     PARAM_CONFIG = [
-        ('lat', 'lat', 'TYPE_11', lambda x, y: round(x, 6) == round(y, 6), 0.0001),
-        ('lon', 'lon', 'TYPE_11', lambda x, y: round(x, 6) == round(y, 6), 0.0001),
-        ('baro_alt', 'alt', 'TYPE_11', lambda x, y: int(x) == int(y), 0.1),
-        ('geo_alt', 'geo_alt', 'TYPE_19', lambda x, y: int(x) == int(y), 0.1),
-        ('ns_vel', 'ns_vel', 'TYPE_19', lambda x, y: abs(x) == abs(y), 0.1),
-        ('ew_vel', 'ew_vel', 'TYPE_19', lambda x, y: abs(x) == abs(y), 0.1),
+        ('lat', 'lat', 'TYPE_11', lambda x, y: x == y, 0.0001),
+        ('lon', 'lon', 'TYPE_11', lambda x, y: x == y, 0.0001),
+        ('baro_alt', 'alt', 'TYPE_11', lambda x, y: x == y, 0.1),
+        ('geo_alt', 'geo_alt', 'TYPE_19', lambda x, y: x == y, 0.1),
+        ('ns_vel', 'ns_vel', 'TYPE_19', lambda x, y: x == y, 0.1),
+        ('ew_vel', 'ew_vel', 'TYPE_19', lambda x, y: x == y, 0.1),
     ]
     
     MSR_CONFIG = [
@@ -81,8 +93,8 @@ class ADSBAnalyzer:
     ]
     
     TSR_CONFIG = [
-        ('selected_alt', 'selected_alt', 'TYPE_29', lambda x, y: abs(x - y) < 50, 1),
-        ('selected_heading', 'selected_heading', 'TYPE_29', lambda x, y: abs(x - y) < 45, 1),
+        ('selected_alt', 'selected_alt', 'TYPE_29', lambda x, y: x == y, 1),
+        ('selected_heading', 'selected_heading', 'TYPE_29', lambda x, y: x == y, 1),
         ('autopilot', 'autopilot', 'TYPE_29', lambda x, y: x == y, 0.1),
         ('vnav', 'vnav', 'TYPE_29', lambda x, y: x == y, 0.1),
         ('altitude_hold', 'altitude_hold', 'TYPE_29', lambda x, y: x == y, 0.1),
@@ -112,6 +124,15 @@ class ADSBAnalyzer:
         self.subtype_changes = []
         self.gnss_loss_start = None
         self.gnss_loss_end = None
+        
+        # Для отслеживания последних значений из входных сообщений
+        self.last_in_values = {
+            'lat': None, 'lon': None, 'alt': None,
+            'geo_alt': None, 'ns_vel': None, 'ew_vel': None
+        }
+        
+        # Список пропущенных полей
+        self.missing_fields_list = []
     
     def parse_log_file(self, filename):
         print(f"\nЗагрузка данных: {filename}")
@@ -143,10 +164,81 @@ class ADSBAnalyzer:
         
         self._analyze_delays_and_changes()
         self._analyze_parameters()
+        self._analyze_missing_fields()
         self._analyze_msr()
         self._analyze_tsr()
         self._analyze_avr()
         self._analyze_subtype()
+    
+    def _analyze_missing_fields(self):
+        """Анализирует собранные отсутствующие поля"""
+        print("\nАнализ отсутствующих полей в SVR -")
+        
+        missing_errors = []
+        
+        for missing in self.missing_fields_list:
+            field = missing['field']
+            in_val = missing['in_val']
+            out_time = missing['out_time']
+            
+            # предыдущее значение этого поля из входных данных
+            prev_in_val = None
+            for in_msg in reversed(self.input_messages):
+                if in_msg.timestamp < out_time:
+                    if field == 'lat' and in_msg.lat is not None:
+                        prev_in_val = in_msg.lat
+                        break
+                    elif field == 'lon' and in_msg.lon is not None:
+                        prev_in_val = in_msg.lon
+                        break
+                    elif field == 'alt' and in_msg.alt is not None:
+                        prev_in_val = in_msg.alt
+                        break
+                    elif field == 'geo_alt' and in_msg.geo_alt is not None:
+                        prev_in_val = in_msg.geo_alt
+                        break
+                    elif field == 'ns_vel' and in_msg.ns_vel is not None:
+                        signed_val = self._get_signed_velocity(in_msg.ns_vel, in_msg.ns_dir)
+                        prev_in_val = signed_val
+                        break
+                    elif field == 'ew_vel' and in_msg.ew_vel is not None:
+                        signed_val = self._get_signed_velocity(in_msg.ew_vel, in_msg.ew_dir)
+                        prev_in_val = signed_val
+                        break
+            
+            # если значение изменилось - ошибка
+            if prev_in_val is not None and in_val != prev_in_val:
+                missing_errors.append(ADSBError(f'missing_{field}', out_time, param=field,
+                    in_val=in_val, prev_val=prev_in_val,
+                    msg=f"Поле {field} изменилось с {prev_in_val} на {in_val}, но не передано в выходном"))
+        
+        print(f"  Найдено ошибок отсутствия полей: {len(missing_errors)}")
+        
+        if missing_errors:
+            field_stats = defaultdict(int)
+            for err in missing_errors:
+                field_stats[err.param] += 1
+            print(f"\n  Статистика отсутствующих полей:")
+            for field, count in field_stats.items():
+                print(f"    - {field}: {count}")
+        
+        self.errors.extend(missing_errors)
+    
+    def _update_last_input(self, in_msg):
+        if in_msg.lat is not None:
+            self.last_in_values['lat'] = in_msg.lat
+        if in_msg.lon is not None:
+            self.last_in_values['lon'] = in_msg.lon
+        if in_msg.alt is not None:
+            self.last_in_values['alt'] = in_msg.alt
+        if in_msg.geo_alt is not None:
+            self.last_in_values['geo_alt'] = in_msg.geo_alt
+        if in_msg.ns_vel is not None:
+            signed_val = self._get_signed_velocity(in_msg.ns_vel, in_msg.ns_dir)
+            self.last_in_values['ns_vel'] = signed_val
+        if in_msg.ew_vel is not None:
+            signed_val = self._get_signed_velocity(in_msg.ew_vel, in_msg.ew_dir)
+            self.last_in_values['ew_vel'] = signed_val
     
     def _parse_input_message(self, line):
         timestamp = self._extract_timestamp(line)
@@ -157,10 +249,12 @@ class ADSBAnalyzer:
             msg = self._parse_type11(line, timestamp)
             if msg:
                 self.input_messages.append(msg)
+                self._update_last_input(msg)
         elif 'TYPE 19' in line:
             msg = self._parse_type19(line, timestamp)
             if msg:
                 self.input_messages.append(msg)
+                self._update_last_input(msg)
         elif 'TYPE 4' in line:
             msg = self._parse_type4(line, timestamp)
             if msg:
@@ -195,7 +289,7 @@ class ADSBAnalyzer:
             msg = self._parse_tsr_struct(line, timestamp)
             if msg:
                 self.tsr_messages.append(msg)
-        elif 'AVR_STRUCT' in line:  # Добавляем парсинг AVR_STRUCT
+        elif 'AVR_STRUCT' in line:
             msg = self._parse_avr_struct(line, timestamp)
             if msg:
                 self.avr_messages.append(msg)
@@ -301,32 +395,30 @@ class ADSBAnalyzer:
         return msg
     
     def _parse_type31(self, line, timestamp):
+        """Парсинг TYPE 31 (регистр 65) - читаем как строки"""
         msg = ADSBMessage(timestamp, 'TYPE_31')
         
+        # adsb_ver
         if 'DO_260B' in line:
             msg.adsb_ver = 'DO-260B'
         elif 'DO_260A' in line:
             msg.adsb_ver = 'DO-260A'
         
-        if 'HFOM_LT_30_M' in line:
-            msg.nacp = 9
-        elif 'HFOM_LT_92_6_M' in line:
-            msg.nacp = 8
-        elif 'HFOM_LT_185_2_M' in line:
-            msg.nacp = 7
+        # nacp
+        nacp_match = re.search(r'NACP\s+(\S+)', line)
+        msg.nacp = nacp_match.group(1) if nacp_match else None
         
-        if 'SDA LEVEL_C' in line:
-            msg.sda = 3
-        elif 'SDA LEVEL_B' in line:
-            msg.sda = 2
+        # sda
+        sda_match = re.search(r'SDA\s+(\S+)', line)
+        msg.sda = sda_match.group(1) if sda_match else None
         
-        if 'SIL LE_1_E10_7' in line:
-            msg.sil = 3
+        # gva
+        gva_match = re.search(r'GVA\s+(\S+)', line)
+        msg.gva = gva_match.group(1) if gva_match else None
         
-        if 'GVA LE_45_M' in line:
-            msg.gva = 2
-        elif 'GVA LE_150_M' in line:
-            msg.gva = 1
+        # sil
+        sil_match = re.search(r'SIL\s+(\S+)', line)
+        msg.sil = sil_match.group(1) if sil_match else None
         
         return msg
     
@@ -336,7 +428,7 @@ class ADSBAnalyzer:
         baro_match = re.search(r'BARO_ALT\s+([0-9\-\.]+)\s+ft', line)
         geo_match = re.search(r'GEO_ALT\s+([0-9\-\.]+)\s+ft', line)
         ns_match = re.search(r'NSV\s+([0-9\-]+)', line)
-        ew_match = re.search(r'EWV\s+(\d+)', line)
+        ew_match = re.search(r'EWV\s+([0-9\-]+)', line)
         
         msg = ADSBMessage(timestamp, 'SVR_STRUCT')
         
@@ -363,22 +455,45 @@ class ADSBAnalyzer:
         if len(chars) >= 8:
             msg.callsign = ''.join(chars[:8]).strip()
         
+        # adsb_ver
         if 'DO_260B' in line:
             msg.adsb_ver = 'DO-260B'
+        elif 'DO_260A' in line:
+            msg.adsb_ver = 'DO-260A'
         
-        if 'HFOM_LT_30_M' in line:
-            msg.nacp = 9
+        # nacp
+        nacp_match = re.search(r'HFOM_(?:LT|GE)_[0-9\._KM]+', line)
+        msg.nacp = nacp_match.group(0) if nacp_match else None
         
-        if 'SDA LEVEL_C' in line:
-            msg.sda = 3
+        # sda
+        sda_match = re.search(r'SDA\s+(LEVEL_[BC]|UNKNOWN|NO_DATA)', line)
+        if sda_match:
+            msg.sda = sda_match.group(1)
+        else:
+            sda_simple = re.search(r'SDA\s+(\S+)', line)
+            msg.sda = sda_simple.group(1) if sda_simple else None
         
-        if 'SIL LE_1_E10_7' in line:
-            msg.sil = 3
+        # sil
+        sil_match = re.search(r'SIL\s+(LE_1_E10_[357]|UNKNOWN_OR_GT_1_E10_3)', line)
+        if sil_match:
+            msg.sil = sil_match.group(1)
+        else:
+            sil_simple = re.search(r'SIL\s+(\S+)', line)
+            msg.sil = sil_simple.group(1) if sil_simple else None
         
-        if 'GVA LE_45_M' in line:
-            msg.gva = 2
+        # gva
+        gva_match = re.search(r'GVA\s+(LE_(?:45|150)_M|NO_DATA_OR_GT_150_M)', line)
+        if gva_match:
+            msg.gva = gva_match.group(1)
+        else:
+            gva_simple = re.search(r'GVA\s+(\S+)', line)
+            msg.gva = gva_simple.group(1) if gva_simple else None
         
         return msg
+
+    def _extract_msr_value(self, line, pattern):
+        match = re.search(pattern, line)
+        return match.group(0) if match else None
     
     def _parse_tsr_struct(self, line, timestamp):
         msg = ADSBMessage(timestamp, 'TSR_STRUCT')
@@ -407,17 +522,13 @@ class ADSBAnalyzer:
             msg.ias = int(ias_match.group(1))
         
         if 'AIRSPEED_TYPE IAS' in line:
-            msg.aircraft_status = 'IAS'  # Indicated Airspeed
+            msg.aircraft_status = 'IAS'
         elif 'AIRSPEED_TYPE TAS' in line:
-            msg.aircraft_status = 'TAS'  # True Airspeed
+            msg.aircraft_status = 'TAS'
         
         heading_match = re.search(r'HEADING_AIR\s+([0-9\.]+)', line)
         if heading_match:
             msg.heading = float(heading_match.group(1))
-        
-        aq_match = re.search(r'AQ\s+(\d+)', line)
-        if aq_match:
-            pass
         
         return msg
     
@@ -435,7 +546,7 @@ class ADSBAnalyzer:
             print("  Нет AVR_STRUCT сообщений для сравнения")
             return
         
-        stats = {'ias': 0, 'heading': 0}
+        stats = {'ias': 0}
         avr_errors = []
         
         for avr_msg in self.avr_messages:
@@ -445,21 +556,13 @@ class ADSBAnalyzer:
                 if avr_msg.ias is not None and in_msg.ias is not None:
                     stats['ias'] += 1
                     if avr_msg.ias != in_msg.ias:
-                        avr_errors.append(ADSBError('avr_ias', avr_msg.timestamp,
+                        avr_errors.append(ADSBError('avr_ias', avr_msg.timestamp, param='ias',
                             in_val=in_msg.ias, out_val=avr_msg.ias,
                             diff=abs(avr_msg.ias - in_msg.ias)))
                         print(f"  Ошибка IAS: t={avr_msg.timestamp:.3f} in={in_msg.ias} kt out={avr_msg.ias} kt diff={abs(avr_msg.ias - in_msg.ias)} kt")
                 
-                if avr_msg.heading is not None and in_msg.heading is not None:
-                    stats['heading'] += 1
-                    if avr_msg.heading != in_msg.heading:
-                        avr_errors.append(ADSBError('avr_heading', avr_msg.timestamp,
-                            in_val=in_msg.heading, out_val=avr_msg.heading,
-                            diff=abs(avr_msg.heading - in_msg.heading)))
-                        print(f"  Ошибка HEADING: t={avr_msg.timestamp:.3f} in={in_msg.heading} deg out={avr_msg.heading} deg diff={abs(avr_msg.heading - in_msg.heading):.1f} deg")
         
         print(f"\n  Воздушная скорость (IAS): проверено {stats['ias']}")
-        print(f"  Курс: проверено {stats['heading']}")
         
         if avr_errors:
             print(f"\n  Всего ошибок AVR: {len(avr_errors)}")
@@ -497,7 +600,6 @@ class ADSBAnalyzer:
             print(f"\n  Потеря ГНСС (TYPE 0): t={self.gnss_loss_start:.3f} - {self.gnss_loss_end:.3f}")
             print(f"  Длительность: {(self.gnss_loss_end - self.gnss_loss_start):.3f} с")
             
-            # Поиск последнего SUBTYPE 1 до потери
             last_subtype1 = None
             for msg in type19_msgs:
                 if msg.timestamp < self.gnss_loss_start and msg.subtype == 1:
@@ -524,7 +626,7 @@ class ADSBAnalyzer:
         
         input_by_type = {
             'TYPE_11': [msg for msg in self.input_messages if msg.type == 'TYPE_11'],
-            'TYPE_19': [msg for msg in self.input_messages if msg.type == 'TYPE_19' and msg.subtype == 1]  #SUBTYPE 1
+            'TYPE_19': [msg for msg in self.input_messages if msg.type == 'TYPE_19' and msg.subtype == 1]
         }
         
         for out_msg in self.output_messages:
@@ -542,9 +644,17 @@ class ADSBAnalyzer:
                 for in_msg in input_by_type.get(msg_type, []):
                     if in_msg.timestamp > out_msg.timestamp:
                         continue
-                    in_val = getattr(in_msg, attr_name)
+                    
+                    if attr_name == 'ns_vel':
+                        in_val = self._get_signed_velocity(in_msg.ns_vel, in_msg.ns_dir)
+                    elif attr_name == 'ew_vel':
+                        in_val = self._get_signed_velocity(in_msg.ew_vel, in_msg.ew_dir)
+                    else:
+                        in_val = getattr(in_msg, attr_name)
+                    
                     if in_val is None:
                         continue
+                    
                     if compare_func(in_val, out_val):
                         diff = out_msg.timestamp - in_msg.timestamp
                         if diff < min_diff:
@@ -555,7 +665,7 @@ class ADSBAnalyzer:
                     state = param_state[param_name]
                     delay = out_msg.timestamp - best_in.timestamp
                     
-                    if state['last_value'] is None or abs(out_val - state['last_value']) > change_tol:
+                    if state['last_value'] is None or out_val != state['last_value']:
                         state['changes'] += 1
                         state['last_value'] = out_val
                         
@@ -605,6 +715,8 @@ class ADSBAnalyzer:
         
         stats = {param_name: 0 for param_name, _, _, _, _ in self.PARAM_CONFIG}
         
+        self.missing_fields_list = []
+        
         for out in self.output_messages:
             if out.type != 'SVR_STRUCT':
                 continue
@@ -620,17 +732,32 @@ class ADSBAnalyzer:
                     
                     if out_val is not None and in_val is not None:
                         stats[param_name] += 1
-                        
                         if not compare_func(in_val, out_val):
                             if param_name == 'lat':
-                                self.errors.append(ADSBError('coord', out.timestamp,
-                                    in_lat=in_val, out_lat=out_val,
-                                    in_lon=in11.lon, out_lon=out.lon))
+                                self.errors.append(ADSBError('svr_lat', out.timestamp, param='lat',
+                                    in_val=in_val, out_val=out_val,
+                                    diff=abs(out_val - in_val)))
                             elif param_name == 'lon':
-                                pass
+                                self.errors.append(ADSBError('svr_lon', out.timestamp, param='lon',
+                                    in_val=in_val, out_val=out_val,
+                                    diff=abs(out_val - in_val)))
+                            elif param_name == 'baro_alt':
+                                self.errors.append(ADSBError('svr_baro_alt', out.timestamp, param='baro_alt',
+                                    in_val=in_val, out_val=out_val,
+                                    diff=abs(out_val - in_val)))
                             else:
-                                self.errors.append(ADSBError(param_name, out.timestamp,
-                                    in_val=in_val, out_val=out_val))
+                                self.errors.append(ADSBError(f'svr_{param_name}', out.timestamp, param=param_name,
+                                    in_val=in_val, out_val=out_val,
+                                    diff=abs(out_val - in_val)))
+                    
+                    #отсутствующие поля
+                    elif in_val is not None and out_val is None:
+                        self.missing_fields_list.append({
+                            'field': attr_name,
+                            'in_val': in_val,
+                            'in_time': in11.timestamp,
+                            'out_time': out.timestamp
+                        })
             
             in19 = self._find_closest(type19_list, out.timestamp)
             if in19:
@@ -639,14 +766,31 @@ class ADSBAnalyzer:
                         continue
                     
                     out_val = getattr(out, attr_name)
-                    in_val = getattr(in19, attr_name)
+                    
+                    if attr_name == 'ns_vel':
+                        in_val = self._get_signed_velocity(in19.ns_vel, in19.ns_dir)
+                    elif attr_name == 'ew_vel':
+                        in_val = self._get_signed_velocity(in19.ew_vel, in19.ew_dir)
+                    elif attr_name == 'geo_alt':
+                        in_val = in19.geo_alt
+                    else:
+                        in_val = None
                     
                     if out_val is not None and in_val is not None:
                         stats[param_name] += 1
-                        
                         if not compare_func(in_val, out_val):
-                            self.errors.append(ADSBError(param_name, out.timestamp,
-                                in_val=in_val, out_val=out_val))
+                            diff = abs(out_val - in_val)
+                            self.errors.append(ADSBError(f'svr_{param_name}', out.timestamp, param=param_name,
+                                in_val=in_val, out_val=out_val,
+                                diff=diff))
+                    
+                    elif in_val is not None and out_val is None:
+                        self.missing_fields_list.append({
+                            'field': attr_name,
+                            'in_val': in_val,
+                            'in_time': in19.timestamp,
+                            'out_time': out.timestamp
+                        })
         
         param_names = {
             'lat': 'Широта', 'lon': 'Долгота',
@@ -659,9 +803,10 @@ class ADSBAnalyzer:
                 print(f"  {param_names.get(param_name, param_name)}: проверено {stats[param_name]}")
         
         if self.errors:
-            print(f"\n  Всего ошибок  SVR: {len(self.errors)}")
+            svr_errors = [e for e in self.errors if e.type.startswith('svr_')]
+            print(f"\n  Всего ошибок SVR (значения): {len(svr_errors)}")
         else:
-            print("\n  Ошибок SVR не найдено")
+            print("\n  Ошибок SVR (значения) не найдено")
     
     def _analyze_msr(self):
         print("\nПроверка параметров MSR -")
@@ -669,46 +814,107 @@ class ADSBAnalyzer:
         type4_list = [msg for msg in self.input_messages if msg.type == 'TYPE_4']
         type31_list = [msg for msg in self.input_messages if msg.type == 'TYPE_31']
         
+        msr_errors = []
+        
         for out in self.msr_messages:
             in4 = self._find_closest(type4_list, out.timestamp)
             if in4 and out.callsign and in4.callsign:
                 if out.callsign != in4.callsign:
-                    self.errors.append(ADSBError('msr_callsign', out.timestamp,
+                    msr_errors.append(ADSBError('msr_callsign', out.timestamp, param='callsign',
                         in_val=in4.callsign, out_val=out.callsign))
             
             in31 = self._find_closest(type31_list, out.timestamp)
             if in31:
-                if out.adsb_ver and in31.adsb_ver and out.adsb_ver != in31.adsb_ver:
-                    self.errors.append(ADSBError('msr_adsb_ver', out.timestamp,
-                        in_val=in31.adsb_ver, out_val=out.adsb_ver))
-                if out.nacp and in31.nacp and out.nacp != in31.nacp:
-                    self.errors.append(ADSBError('msr_nacp', out.timestamp,
-                        in_val=in31.nacp, out_val=out.nacp))
+                if out.adsb_ver and in31.adsb_ver:
+                    if out.adsb_ver != in31.adsb_ver:
+                        msr_errors.append(ADSBError('msr_adsb_ver', out.timestamp, param='adsb_ver',
+                            in_val=in31.adsb_ver, out_val=out.adsb_ver))
+                
+                if out.nacp and in31.nacp:
+                    if out.nacp != in31.nacp:
+                        msr_errors.append(ADSBError('msr_nacp', out.timestamp, param='nacp',
+                            in_val=in31.nacp, out_val=out.nacp))
+                
+                # sda
+                if out.sda and in31.sda:
+                    if out.sda != in31.sda:
+                        msr_errors.append(ADSBError('msr_sda', out.timestamp, param='sda',
+                            in_val=in31.sda, out_val=out.sda))
+                
+                # sil
+                if out.sil and in31.sil:
+                    if out.sil != in31.sil:
+                        msr_errors.append(ADSBError('msr_sil', out.timestamp, param='sil',
+                            in_val=in31.sil, out_val=out.sil))
+                
+                # gva
+                if out.gva and in31.gva:
+                    if out.gva != in31.gva:
+                        msr_errors.append(ADSBError('msr_gva', out.timestamp, param='gva',
+                            in_val=in31.gva, out_val=out.gva))
         
         print(f"  Обработано MSR_STRUCT: {len(self.msr_messages)}")
-        print("  Ошибок MSR не найдено")
+        
+        if msr_errors:
+            print(f"  Всего ошибок MSR: {len(msr_errors)}")
+            self.errors.extend(msr_errors)
+        else:
+            print("  Ошибок MSR не найдено")
     
     def _analyze_tsr(self):
         print("\nПроверка параметров TSR -")
         
         type29_list = [msg for msg in self.input_messages if msg.type == 'TYPE_29']
         
+        tsr_errors = []
+        
         for out in self.tsr_messages:
             in29 = self._find_closest(type29_list, out.timestamp)
             if in29:
-                if out.selected_alt and in29.selected_alt:
-                    if abs(out.selected_alt - in29.selected_alt) > 50:
-                        self.errors.append(ADSBError('tsr_alt', out.timestamp,
-                            in_val=in29.selected_alt, out_val=out.selected_alt))
+                if out.selected_alt is not None and in29.selected_alt is not None:
+                    if out.selected_alt != in29.selected_alt:
+                        tsr_errors.append(ADSBError('tsr_selected_alt', out.timestamp, param='selected_alt',
+                            in_val=in29.selected_alt, out_val=out.selected_alt,
+                            diff=abs(out.selected_alt - in29.selected_alt)))
                 
-                if out.selected_heading and in29.selected_heading:
-                    diff = abs(out.selected_heading - in29.selected_heading)
-                    if diff > 45:
-                        self.errors.append(ADSBError('tsr_heading', out.timestamp,
-                            in_val=in29.selected_heading, out_val=out.selected_heading))
+                if out.selected_heading is not None and in29.selected_heading is not None:
+                    if out.selected_heading != in29.selected_heading:
+                        tsr_errors.append(ADSBError('tsr_selected_heading', out.timestamp, param='selected_heading',
+                            in_val=in29.selected_heading, out_val=out.selected_heading,
+                            diff=abs(out.selected_heading - in29.selected_heading)))
+                
+                if out.autopilot is not None and in29.autopilot is not None:
+                    if out.autopilot != in29.autopilot:
+                        tsr_errors.append(ADSBError('tsr_autopilot', out.timestamp, param='autopilot',
+                            in_val=in29.autopilot, out_val=out.autopilot))
+                
+                if out.vnav is not None and in29.vnav is not None:
+                    if out.vnav != in29.vnav:
+                        tsr_errors.append(ADSBError('tsr_vnav', out.timestamp, param='vnav',
+                            in_val=in29.vnav, out_val=out.vnav))
+                
+                if out.altitude_hold is not None and in29.altitude_hold is not None:
+                    if out.altitude_hold != in29.altitude_hold:
+                        tsr_errors.append(ADSBError('tsr_altitude_hold', out.timestamp, param='altitude_hold',
+                            in_val=in29.altitude_hold, out_val=out.altitude_hold))
+                
+                if out.approach is not None and in29.approach is not None:
+                    if out.approach != in29.approach:
+                        tsr_errors.append(ADSBError('tsr_approach', out.timestamp, param='approach',
+                            in_val=in29.approach, out_val=out.approach))
+                
+                if out.lnav is not None and in29.lnav is not None:
+                    if out.lnav != in29.lnav:
+                        tsr_errors.append(ADSBError('tsr_lnav', out.timestamp, param='lnav',
+                            in_val=in29.lnav, out_val=out.lnav))
         
         print(f"  Обработано TSR_STRUCT: {len(self.tsr_messages)}")
-        print("  Ошибок TSR не найдено")
+        
+        if tsr_errors:
+            print(f"  Всего ошибок TSR: {len(tsr_errors)}")
+            self.errors.extend(tsr_errors)
+        else:
+            print("  Ошибок TSR не найдено")
     
     def _find_closest(self, msg_list, out_time, max_diff=0.5):
         best = None

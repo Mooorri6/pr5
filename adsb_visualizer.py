@@ -10,9 +10,32 @@ class ADSBVisualizer:
         self.icao = analyzer.icao
         self.thresholds = analyzer.thresholds
         
-        self.errors_dir = f"errors_{self.icao}"
-        if not os.path.exists(self.errors_dir):
-            os.makedirs(self.errors_dir)
+        self.base_dir = f"errors_{self.icao}"
+        self._create_dirs()
+    
+    def _create_dirs(self):
+        """Создание структуры папок по типам донесений"""
+        self.dirs = {
+            'SVR': os.path.join(self.base_dir, 'SVR'),
+            'MSR': os.path.join(self.base_dir, 'MSR'),
+            'TSR': os.path.join(self.base_dir, 'TSR'),
+            'AVR': os.path.join(self.base_dir, 'AVR'),
+        }
+        for d in self.dirs.values():
+            if not os.path.exists(d):
+                os.makedirs(d)
+    
+    def _get_report_type(self, error_type):
+        """Определение типа донесения по типу ошибки"""
+        if error_type.startswith('svr_'):
+            return 'SVR'
+        elif error_type.startswith('msr_'):
+            return 'MSR'
+        elif error_type.startswith('tsr_'):
+            return 'TSR'
+        elif error_type.startswith('avr_'):
+            return 'AVR'
+        return 'OTHER'
     
     def plot_all(self):
         self.plot_parameters()
@@ -21,7 +44,6 @@ class ADSBVisualizer:
         self.plot_tsr()
         self._write_error_files()
     
-    #курс
     def plot_heading(self):
         in_data = self._collect_input_data()
         out_data = self._collect_output_data()
@@ -57,10 +79,9 @@ class ADSBVisualizer:
         plt.tight_layout()
         filename = f'heading_{self.icao}.png'
         plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.show()
+        plt.close()
         print(f"График курса сохранен: {filename}")
     
-    #графики изменений
     def plot_changes_by_param(self):
         if not self.analyzer.all_changes:
             print("Нет данных об изменениях для построения графиков")
@@ -91,12 +112,9 @@ class ADSBVisualizer:
             'ew_vel': 'Скорость (восток-запад)'
         }
         
-        plotted_params = []
         for param, changes in changes_by_param.items():
             if not changes:
                 continue
-            
-            plotted_params.append(param)
             
             plt.figure(figsize=(14, 8))
             
@@ -124,7 +142,7 @@ class ADSBVisualizer:
             plt.tight_layout()
             filename = f'changes_{param}_{self.icao}.png'
             plt.savefig(filename, dpi=150, bbox_inches='tight')
-            plt.show()
+            plt.close()
             print(f"График изменений для {title} сохранен: {filename}")
     
     def _collect_input_data(self):
@@ -219,7 +237,6 @@ class ADSBVisualizer:
         
         return data
 
-    #графики параметров
     def plot_parameters(self):
         if not self.analyzer.output_messages:
             print("Недостаточно данных для построения графиков")
@@ -235,7 +252,7 @@ class ADSBVisualizer:
         fig, axes = plt.subplots(3, 2, figsize=(16, 12))
         fig.suptitle(f'Параметры ICAO {self.icao}', fontsize=14)
         
-        #Широта
+        # Широта
         ax1 = axes[0, 0]
         if in_data['times']:
             ax1.plot(in_data['times'], in_data['lats'], 'b-', 
@@ -245,7 +262,7 @@ class ADSBVisualizer:
                     markersize=3, label='SVR_STRUCT')
         self._setup_plot(ax1, 'Время (с)', 'Широта (градусы)', 'Широта')
         
-        #Долгота
+        # Долгота
         ax2 = axes[0, 1]
         if in_data['times']:
             ax2.plot(in_data['times'], in_data['lons'], 'b-', 
@@ -255,7 +272,7 @@ class ADSBVisualizer:
                     markersize=3, label='SVR_STRUCT')
         self._setup_plot(ax2, 'Время (с)', 'Долгота (градусы)', 'Долгота')
         
-        #Баро высота
+        # Баро высота
         ax3 = axes[1, 0]
         if in_data['alt_times'] or out_data['alt_times']:
             if in_data['alt_times']:
@@ -269,7 +286,7 @@ class ADSBVisualizer:
             ax3.text(0.5, 0.5, 'Нет данных', transform=ax3.transAxes, ha='center', va='center')
             ax3.set_title('Барометрическая высота')
         
-        #Гео высота
+        # Гео высота
         ax4 = axes[1, 1]
         if in_data['geo_times'] or out_data['geo_times']:
             if in_data['geo_times']:
@@ -283,7 +300,7 @@ class ADSBVisualizer:
             ax4.text(0.5, 0.5, 'Нет данных', transform=ax4.transAxes, ha='center', va='center')
             ax4.set_title('Геометрическая высота')
         
-        #Скорость NS
+        # Скорость NS
         ax5 = axes[2, 0]
         if in_data['ns_vel_times'] or out_data['ns_vel_times']:
             if in_data['ns_vel_times']:
@@ -297,7 +314,7 @@ class ADSBVisualizer:
             ax5.text(0.5, 0.5, 'Нет данных', transform=ax5.transAxes, ha='center', va='center')
             ax5.set_title('Скорость North-South')
         
-        #Скорость EW
+        # Скорость EW
         ax6 = axes[2, 1]
         if in_data['ew_vel_times'] or out_data['ew_vel_times']:
             if in_data['ew_vel_times']:
@@ -314,10 +331,9 @@ class ADSBVisualizer:
         plt.tight_layout()
         filename = f'param_{self.icao}.png'
         plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.show()
+        plt.close()
         print(f"График параметров сохранен: {filename}")
 
-    
     def gen_report(self):
         filename = f'test_report_{self.icao}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
         
@@ -343,8 +359,6 @@ class ADSBVisualizer:
         f.write("-" * 40 + "\n")
         
         if self.analyzer.delays:
-            delays_ms = [d['delay'] * 1000 for d in self.analyzer.delays]
-            
             delays_by_param = {}
             for d in self.analyzer.delays:
                 param = d['param']
@@ -371,8 +385,7 @@ class ADSBVisualizer:
                 f.write(f"    Задержек: {len(delays)}\n")
                 f.write(f"    Мин: {min_delay:.1f} мс, Макс: {max_delay:.1f} мс\n\n")
             
-            exceed_total = len(delays_ms)
-            f.write(f"Всего превышений: {exceed_total}\n\n")
+            f.write(f"Всего превышений: {len(self.analyzer.delays)}\n\n")
         else:
             f.write("Нет данных о задержках\n")
         f.write("\n")
@@ -386,23 +399,22 @@ class ADSBVisualizer:
             f.write("Ошибок не обнаружено\n\n")
             return
         
-        errors_by_type = defaultdict(list)
+        errors_by_report = defaultdict(lambda: defaultdict(list))
         for err in self.analyzer.errors:
-            errors_by_type[err.type].append(err)
+            report_type = self._get_report_type(err.type)
+            param = getattr(err, 'param', 'unknown')
+            errors_by_report[report_type][param].append(err)
         
-        for err_type, err_list in errors_by_type.items():
-            f.write(f"\n{err_type} ({len(err_list)} ошибок):\n")
-            for err in err_list[:10]:
-                f.write(f"  t={err.time:.1f}с: ")
-                if err_type == 'coord':
-                    f.write(f"lat_diff={getattr(err, 'lat_diff', 0):.1f}м, lon_diff={getattr(err, 'lon_diff', 0):.1f}м")
-                elif err_type == 'speed':
-                    f.write(f"diff={getattr(err, 'diff', 0):.1f} узлов")
-                elif err_type == 'heading':
-                    f.write(f"diff={getattr(err, 'diff', 0):.1f}°")
-                else:
-                    f.write(f"in={getattr(err, 'in_val', '?')} out={getattr(err, 'out_val', '?')}")
-                f.write("\n")
+        for report_type, params in errors_by_report.items():
+            f.write(f"\n{report_type}:\n")
+            for param, err_list in params.items():
+                f.write(f"  {param} ({len(err_list)} ошибок):\n")
+                for err in err_list[:10]:
+                    diff = getattr(err, 'diff', None)
+                    if diff:
+                        f.write(f"    t={err.time:.1f}с, diff={diff:.6f}\n")
+                    else:
+                        f.write(f"    t={err.time:.1f}с\n")
         f.write("\n")
     
     def _write_error_files(self):
@@ -410,65 +422,43 @@ class ADSBVisualizer:
             print("Нет ошибок для записи в файлы")
             return
         
-        errors_by_type = {}
+        errors_by_report = defaultdict(lambda: defaultdict(list))
         for err in self.analyzer.errors:
-            err_type = err.type
-            if err_type not in errors_by_type:
-                errors_by_type[err_type] = []
-            errors_by_type[err_type].append(err)
+            report_type = self._get_report_type(err.type)
+            param = getattr(err, 'param', 'unknown')
+            errors_by_report[report_type][param].append(err)
         
-        if not os.path.exists(self.errors_dir):
-            os.makedirs(self.errors_dir)
-        
-        for err_type, err_list in errors_by_type.items():
-            if err_type == 'coord':
-                # Ошибки координат
-                filename = f"{self.errors_dir}/coord_errors_{self.icao}.csv"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("Время,Ошибка широты (м),Ошибка долготы (м),Входное значение,Выходное значение\n")
-                    for err in err_list:
-                        lat_diff = getattr(err, 'lat_diff', 0)
-                        lon_diff = getattr(err, 'lon_diff', 0)
-                        in_val = getattr(err, 'in_val', '?')
-                        out_val = getattr(err, 'out_val', '?')
-                        f.write(f"{err.time:.3f},{lat_diff:.2f},{lon_diff:.2f},{in_val},{out_val}\n")
-                print(f"Записано {len(err_list)} ошибок координат в {filename}")
+        for report_type, params in errors_by_report.items():
+            report_dir = self.dirs.get(report_type, self.base_dir)
             
-            elif err_type == 'speed':
-                # Ошибки скорости
-                filename = f"{self.errors_dir}/speed_errors_{self.icao}.csv"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("Время,Ошибка (узлы),Входное значение,Выходное значение\n")
+            for param, err_list in params.items():
+                filename = os.path.join(report_dir, f'{param}_errors_{self.icao}.csv')
+                with open(filename, 'w', encoding='utf-8-sig') as f:
+                    if param in ['lat', 'lon']:
+                        f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
+                    elif param in ['ns_vel', 'ew_vel']:
+                        f.write("Время,Ошибка (узлы),Входное значение,Выходное значение\n")
+                    elif param in ['baro_alt', 'geo_alt', 'selected_alt']:
+                        f.write("Время,Ошибка (футы),Входное значение,Выходное значение\n")
+                    elif param in ['selected_heading', 'heading']:
+                        f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
+                    else:
+                        f.write("Время,Входное значение,Выходное значение\n")
+                    
                     for err in err_list:
                         diff = getattr(err, 'diff', 0)
                         in_val = getattr(err, 'in_val', '?')
                         out_val = getattr(err, 'out_val', '?')
-                        f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
-                print(f"Записано {len(err_list)} ошибок скорости в {filename}")
-            
-            elif err_type in ['baro_altitude', 'geo_altitude', 'altitude']:
-                # Ошибки высоты
-                filename = f"{self.errors_dir}/altitude_errors_{self.icao}.csv"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("Время,Ошибка (футы),Тип,Входное значение,Выходное значение\n")
-                    for err in err_list:
-                        diff = getattr(err, 'diff', 0)
-                        in_val = getattr(err, 'in_val', '?')
-                        out_val = getattr(err, 'out_val', '?')
-                        f.write(f"{err.time:.3f},{diff:.2f},{err_type},{in_val},{out_val}\n")
-                print(f"Записано {len(err_list)} ошибок высоты в {filename}")
-            
-            else:
-                # Другие типы ошибок
-                filename = f"{self.errors_dir}/other_errors_{self.icao}.csv"
-                file_exists = os.path.exists(filename)
-                with open(filename, 'a', encoding='utf-8') as f:
-                    if not file_exists:
-                        f.write("Время,Тип ошибки,Данные\n")
-                    attrs = {k: v for k, v in err.__dict__.items() if k not in ['type', 'time']}
-                    f.write(f"{err.time:.3f},{err_type},{attrs}\n")
-                if not file_exists:
-                    print(f"Записаны прочие ошибки в {filename}")
+                        if param in ['lat', 'lon']:
+                            f.write(f"{err.time:.3f},{diff:.6f},{in_val},{out_val}\n")
+                        elif param in ['ns_vel', 'ew_vel']:
+                            f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                        elif param in ['baro_alt', 'geo_alt', 'selected_alt']:
+                            f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                        else:
+                            f.write(f"{err.time:.3f},{in_val},{out_val}\n")
+                
+                print(f"Записано {len(err_list)} ошибок в {filename}")
     
     def _write_summary(self, f):
         f.write("-" * 40 + "\n")
@@ -493,20 +483,16 @@ class ADSBVisualizer:
             f.write("Тестирование не пройдено\n")
             f.write(f"Обнаружено ошибок: {total_errors}\n")
             
-            err_counts = {}
+            err_counts = defaultdict(lambda: defaultdict(int))
             for err in self.analyzer.errors:
-                err_counts[err.type] = err_counts.get(err.type, 0) + 1
+                report_type = self._get_report_type(err.type)
+                param = getattr(err, 'param', 'unknown')
+                err_counts[report_type][param] += 1
             
-            for err_type, count in err_counts.items():
-                names = {
-                    'coord': 'координаты', 
-                    'speed': 'скорость',
-                    'heading': 'курс', 
-                    'altitude': 'высота',
-                    'baro_altitude': 'барометрическая высота',
-                    'geo_altitude': 'геометрическая высота'
-                }
-                f.write(f"  - {names.get(err_type, err_type)}: {count}\n")
+            for report_type, params in err_counts.items():
+                f.write(f"\n  {report_type}:\n")
+                for param, count in params.items():
+                    f.write(f"    - {param}: {count}\n")
     
     def _setup_plot(self, ax, xlabel, ylabel, title):
         ax.set_xlabel(xlabel)
@@ -515,9 +501,7 @@ class ADSBVisualizer:
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
 
-    
     def plot_tsr(self):
-        """Графики TSR_STRUCT параметров"""
         if not self.analyzer.tsr_messages:
             print("Нет данных TSR для построения графика")
             return
@@ -559,5 +543,5 @@ class ADSBVisualizer:
         plt.tight_layout()
         filename = f'tsr_params_{self.icao}.png'
         plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.show()
+        plt.close()
         print(f"График TSR сохранен: {filename}")

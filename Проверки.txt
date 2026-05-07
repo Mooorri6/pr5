@@ -1,0 +1,28 @@
+Анализ отсутствующих полей
+
+TYPE 11 - lat, lon, alt
+TYPE 19 - geo_alt, ns_vel, ew_vel
+
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+SVR_STRUCT
+TYPE 11 - lat, lon, ALT (барометрическая высота)
+
+TYPE 19 SUBTYPE 1 - DIF_FROM_BARO_ALT (вычисляется geo_alt), NS_VEL + NS_DIR, EW_VEL + EW_DIR
+
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+MSR_STRUCT
+
+TYPE 4 - символы в кавычках
+TYPE 31 - MOPS_VER, NACP, sda, sil, gva
+
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+TSR_STRUCT
+TYPE 29 - selected_alt, selected_heading, autopilot, vnav, altitude_hold, approach, lnav
+
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+AVR
+
+TYPE 19 SUBTYPE 3 - ias
