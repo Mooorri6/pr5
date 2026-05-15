@@ -20,6 +20,7 @@ class ADSBVisualizer:
             'MSR': os.path.join(self.base_dir, 'MSR'),
             'TSR': os.path.join(self.base_dir, 'TSR'),
             'AVR': os.path.join(self.base_dir, 'AVR'),
+            'DUPLICATE': os.path.join(self.base_dir, 'DUPLICATE'),
         }
         for d in self.dirs.values():
             if not os.path.exists(d):
@@ -27,7 +28,9 @@ class ADSBVisualizer:
     
     def _get_report_type(self, error_type):
         """Определение типа донесения по типу ошибки"""
-        if error_type.startswith('svr_'):
+        if error_type.startswith('duplicate_'):
+            return 'DUPLICATE' 
+        elif error_type.startswith('svr_'):
             return 'SVR'
         elif error_type.startswith('msr_'):
             return 'MSR'
@@ -433,30 +436,37 @@ class ADSBVisualizer:
             
             for param, err_list in params.items():
                 filename = os.path.join(report_dir, f'{param}_errors_{self.icao}.csv')
+                
                 with open(filename, 'w', encoding='utf-8-sig') as f:
-                    if param in ['lat', 'lon']:
-                        f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
-                    elif param in ['ns_vel', 'ew_vel']:
-                        f.write("Время,Ошибка (узлы),Входное значение,Выходное значение\n")
-                    elif param in ['baro_alt', 'geo_alt', 'selected_alt']:
-                        f.write("Время,Ошибка (футы),Входное значение,Выходное значение\n")
-                    elif param in ['selected_heading', 'heading']:
-                        f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
+                    if report_type == 'DUPLICATE':
+                        f.write("Время,Значение\n")
+                        for err in err_list:
+                            value = getattr(err, 'value', '?')
+                            f.write(f"{err.time:.3f},{value}\n")
                     else:
-                        f.write("Время,Входное значение,Выходное значение\n")
-                    
-                    for err in err_list:
-                        diff = getattr(err, 'diff', 0)
-                        in_val = getattr(err, 'in_val', '?')
-                        out_val = getattr(err, 'out_val', '?')
                         if param in ['lat', 'lon']:
-                            f.write(f"{err.time:.3f},{diff:.6f},{in_val},{out_val}\n")
+                            f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
                         elif param in ['ns_vel', 'ew_vel']:
-                            f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                            f.write("Время,Ошибка (узлы),Входное значение,Выходное значение\n")
                         elif param in ['baro_alt', 'geo_alt', 'selected_alt']:
-                            f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                            f.write("Время,Ошибка (футы),Входное значение,Выходное значение\n")
+                        elif param in ['selected_heading', 'heading']:
+                            f.write("Время,Ошибка (градусы),Входное значение,Выходное значение\n")
                         else:
-                            f.write(f"{err.time:.3f},{in_val},{out_val}\n")
+                            f.write("Время,Входное значение,Выходное значение\n")
+                        
+                        for err in err_list:
+                            diff = getattr(err, 'diff', 0)
+                            in_val = getattr(err, 'in_val', '?')
+                            out_val = getattr(err, 'out_val', '?')
+                            if param in ['lat', 'lon']:
+                                f.write(f"{err.time:.3f},{diff:.6f},{in_val},{out_val}\n")
+                            elif param in ['ns_vel', 'ew_vel']:
+                                f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                            elif param in ['baro_alt', 'geo_alt', 'selected_alt']:
+                                f.write(f"{err.time:.3f},{diff:.2f},{in_val},{out_val}\n")
+                            else:
+                                f.write(f"{err.time:.3f},{in_val},{out_val}\n")
                 
                 print(f"Записано {len(err_list)} ошибок в {filename}")
     

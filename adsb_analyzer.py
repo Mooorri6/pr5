@@ -17,7 +17,8 @@ class ADSBMessage:
                  'callsign', 'adsb_ver', 'nacp', 'sda', 'sil', 'gva',
                  'selected_alt', 'selected_heading', 'autopilot', 'vnav',
                  'altitude_hold', 'approach', 'lnav', 'gnss_lost', 
-                 'ias', 'heading', 'aircraft_status',  'tcas_operational', 'arv_capability', 'tsr_capability')
+                 'ias', 'heading', 'aircraft_status', 'tcas_operational', 
+                 'arv_capability', 'tsr_capability')
     
     def __init__(self, timestamp, msg_type='OTHER'):
         self.type = msg_type
@@ -73,11 +74,10 @@ class ADSBAnalyzer:
             return -vel
         return vel
     
-    #svr
     PARAM_CONFIG = [
-        ('lat', 'lat', 'TYPE_11', lambda x, y: x == y, 0.0001),
-        ('lon', 'lon', 'TYPE_11', lambda x, y: x == y, 0.0001),
-        ('baro_alt', 'alt', 'TYPE_11', lambda x, y: x == y, 0.1),
+        ('lat', 'lat', 'POSITION_MSG', lambda x, y: x == y, 0.0001),
+        ('lon', 'lon', 'POSITION_MSG', lambda x, y: x == y, 0.0001),
+        ('baro_alt', 'alt', 'POSITION_MSG', lambda x, y: x == y, 0.1),
         ('geo_alt', 'geo_alt', 'TYPE_19', lambda x, y: x == y, 0.1),
         ('ns_vel', 'ns_vel', 'TYPE_19', lambda x, y: x == y, 0.1),
         ('ew_vel', 'ew_vel', 'TYPE_19', lambda x, y: x == y, 0.1),
@@ -169,6 +169,11 @@ class ADSBAnalyzer:
         self._analyze_tsr()
         self._analyze_avr()
         self._analyze_subtype()
+        self._analyze_duplicate_fields()
+    
+    def _is_gnss_loss_coordinates(self, lat, lon):
+        """Проверяет, являются ли координаты признаком потери ГНСС"""
+        return lat == 0.0 and lon == 0.0
     
     def _analyze_missing_fields(self):
         """Анализирует собранные отсутствующие поля"""
@@ -181,7 +186,6 @@ class ADSBAnalyzer:
             in_val = missing['in_val']
             out_time = missing['out_time']
             
-            # предыдущее значение этого поля из входных данных
             prev_in_val = None
             for in_msg in reversed(self.input_messages):
                 if in_msg.timestamp < out_time:
@@ -206,7 +210,6 @@ class ADSBAnalyzer:
                         prev_in_val = signed_val
                         break
             
-            # если значение изменилось - ошибка
             if prev_in_val is not None and in_val != prev_in_val:
                 missing_errors.append(ADSBError(f'missing_{field}', out_time, param=field,
                     in_val=in_val, prev_val=prev_in_val,
@@ -245,8 +248,8 @@ class ADSBAnalyzer:
         if timestamp is None:
             return
         
-        if 'TYPE 11' in line or 'TYPE 18' in line or 'TYPE 12' in line:
-            msg = self._parse_type11(line, timestamp)
+        if ('lat' in line or 'LAT' in line) and ('lon' in line or 'LON' in line):
+            msg = self._parse_position_message(line, timestamp)
             if msg:
                 self.input_messages.append(msg)
                 self._update_last_input(msg)
@@ -298,7 +301,8 @@ class ADSBAnalyzer:
         match = re.match(r'^(\d+\.\d+)', line)
         return float(match.group(1)) if match else None
     
-    def _parse_type11(self, line, timestamp):
+    def _parse_position_message(self, line, timestamp):
+        """Парсинг любого сообщения с координатами (TYPE 11, 12, 18, и другие)"""
         lat_match = re.search(r'lat\s+([0-9\-\.]+)', line, re.I)
         lon_match = re.search(r'lon\s+([0-9\-\.]+)', line, re.I)
         alt_match = re.search(r'ALT\s+(\d+)\s+ft', line)
@@ -306,7 +310,23 @@ class ADSBAnalyzer:
         if not lat_match or not lon_match:
             return None
         
-        msg = ADSBMessage(timestamp, 'TYPE_11')
+        msg_type = 'POSITION_MSG'
+        if 'TYPE 11' in line:
+            msg_type = 'TYPE_11'
+        elif 'TYPE 12' in line:
+            msg_type = 'TYPE_12'
+        elif 'TYPE 18' in line:
+            msg_type = 'TYPE_18'
+        elif 'REG 05' in line:
+            msg_type = 'REG_05'
+        elif 'REG 06' in line:
+            msg_type = 'REG_06'
+        else:
+            type_match = re.search(r'TYPE\s+(\d+)', line)
+            if type_match:
+                msg_type = f'TYPE_{type_match.group(1)}'
+        
+        msg = ADSBMessage(timestamp, msg_type)
         msg.lat = float(lat_match.group(1))
         msg.lon = float(lon_match.group(1))
         if alt_match:
@@ -624,9 +644,15 @@ class ADSBAnalyzer:
         for param_name, _, _, _, change_tol in self.PARAM_CONFIG:
             param_state[param_name] = {'last_value': None, 'changes': 0, 'delays': []}
         
+        position_msgs = [msg for msg in self.input_messages 
+                         if msg.lat is not None and msg.lon is not None]
+        
+        type19_list = [msg for msg in self.input_messages 
+                       if msg.type == 'TYPE_19' and msg.subtype == 1]
+        
         input_by_type = {
-            'TYPE_11': [msg for msg in self.input_messages if msg.type == 'TYPE_11'],
-            'TYPE_19': [msg for msg in self.input_messages if msg.type == 'TYPE_19' and msg.subtype == 1]
+            'POSITION_MSG': position_msgs,
+            'TYPE_19': type19_list
         }
         
         for out_msg in self.output_messages:
@@ -710,8 +736,10 @@ class ADSBAnalyzer:
     def _analyze_parameters(self):
         print("\nПроверка параметров SVR -")
         
-        type11_list = [msg for msg in self.input_messages if msg.type == 'TYPE_11']
-        type19_list = [msg for msg in self.input_messages if msg.type == 'TYPE_19' and msg.subtype == 1]
+        position_msgs = [msg for msg in self.input_messages 
+                         if msg.lat is not None and msg.lon is not None]
+        type19_list = [msg for msg in self.input_messages 
+                       if msg.type == 'TYPE_19' and msg.subtype == 1]
         
         stats = {param_name: 0 for param_name, _, _, _, _ in self.PARAM_CONFIG}
         
@@ -721,14 +749,19 @@ class ADSBAnalyzer:
             if out.type != 'SVR_STRUCT':
                 continue
             
-            in11 = self._find_closest(type11_list, out.timestamp)
-            if in11:
+            in_pos = self._find_closest(position_msgs, out.timestamp)
+            if in_pos:
+                is_gnss_loss_input = self._is_gnss_loss_coordinates(in_pos.lat, in_pos.lon)
+                
                 for param_name, attr_name, msg_type, compare_func, _ in self.PARAM_CONFIG:
-                    if msg_type != 'TYPE_11':
+                    if msg_type != 'POSITION_MSG':
                         continue
                     
                     out_val = getattr(out, attr_name)
-                    in_val = getattr(in11, attr_name)
+                    in_val = getattr(in_pos, attr_name)
+                    
+                    if is_gnss_loss_input and param_name in ['lat', 'lon']:
+                        continue
                     
                     if out_val is not None and in_val is not None:
                         stats[param_name] += 1
@@ -750,12 +783,11 @@ class ADSBAnalyzer:
                                     in_val=in_val, out_val=out_val,
                                     diff=abs(out_val - in_val)))
                     
-                    #отсутствующие поля
                     elif in_val is not None and out_val is None:
                         self.missing_fields_list.append({
                             'field': attr_name,
                             'in_val': in_val,
-                            'in_time': in11.timestamp,
+                            'in_time': in_pos.timestamp,
                             'out_time': out.timestamp
                         })
             
@@ -915,7 +947,75 @@ class ADSBAnalyzer:
             self.errors.extend(tsr_errors)
         else:
             print("  Ошибок TSR не найдено")
+            
     
+    def _analyze_duplicate_fields(self):
+        print("\nАнализ дублирования полей в SVR -")
+        
+        last_sent_values = {
+            'lat': None, 'lon': None, 'alt': None,
+            'geo_alt': None, 'ns_vel': None, 'ew_vel': None
+        }
+        last_sent_time = {
+            'lat': 0, 'lon': 0, 'alt': 0,
+            'geo_alt': 0, 'ns_vel': 0, 'ew_vel': 0
+        }
+        
+        duplicate_errors = []
+        
+        for out in self.output_messages:
+            if out.type != 'SVR_STRUCT':
+                continue
+            
+            for field in ['lat', 'lon', 'alt', 'geo_alt', 'ns_vel', 'ew_vel']:
+                out_val = getattr(out, field)
+                if out_val is None:
+                    continue
+                
+                last_val = last_sent_values[field]
+                last_time = last_sent_time[field]
+                
+                if last_val is not None and out_val == last_val:
+                    had_update = self._was_field_updated_between(field, last_time, out.timestamp)
+                    
+                    if not had_update:
+                        duplicate_errors.append(ADSBError(f'duplicate_{field}', out.timestamp, param=field,
+                            value=out_val, last_time=last_time,
+                            msg=f"Поле {field}={out_val} повторно передано без изменения"))
+                
+                last_sent_values[field] = out_val
+                last_sent_time[field] = out.timestamp
+        
+        print(f"  Найдено ошибок дублирования полей: {len(duplicate_errors)}")
+        
+        if duplicate_errors:
+            field_stats = defaultdict(int)
+            for err in duplicate_errors:
+                field_stats[err.param] += 1
+            print(f"\n  Статистика дублирующихся полей:")
+            for field, count in field_stats.items():
+                print(f"    - {field}: {count}")
+        
+        self.errors.extend(duplicate_errors)
+
+    def _was_field_updated_between(self, field, start_time, end_time):
+        """проверка было ли обновление поля во входных данных между start_time и end_time"""
+        for in_msg in self.input_messages:
+            if start_time < in_msg.timestamp < end_time:
+                if field == 'lat' and in_msg.lat is not None:
+                    return True
+                elif field == 'lon' and in_msg.lon is not None:
+                    return True
+                elif field == 'alt' and in_msg.alt is not None:
+                    return True
+                elif field == 'geo_alt' and in_msg.geo_alt is not None:
+                    return True
+                elif field == 'ns_vel' and in_msg.ns_vel is not None:
+                    return True
+                elif field == 'ew_vel' and in_msg.ew_vel is not None:
+                    return True
+        return False
+        
     def _find_closest(self, msg_list, out_time, max_diff=0.5):
         best = None
         best_diff = float('inf')
